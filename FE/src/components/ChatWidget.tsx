@@ -8,6 +8,9 @@ import { useSttStreaming } from "@/hooks/useSttStreaming"
 import { chatService } from "@/services/chatService"
 import pcmWorkletSource from "@/audio/pcmWorkletProcessor.js?raw"
 
+const iconPng = "/assets/icon.png"
+const blueIconPng = "/assets/icon-blue.png"
+
 interface ChatWidgetProps {
   isOpen?: boolean
   onClose?: () => void
@@ -80,7 +83,6 @@ export function ChatWidget({
   const pendingBatchRef = useRef<{ question: string; answer: string } | null>(null)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
   const batchAudioContextRef = useRef<AudioContext | null>(null)
   const batchStreamRef = useRef<MediaStream | null>(null)
   const batchWorkletNodeRef = useRef<AudioWorkletNode | null>(null)
@@ -455,7 +457,13 @@ export function ChatWidget({
 
   if (showModalOverlay) {
     return (
-      <Card className={`flex flex-col ${isExpanded ? "h-[90vh]" : "h-[660px]"} ${isExpanded ? "w-[90vw]" : "w-[450px]"} shadow-2xl rounded-2xl bg-white transition-all`}>
+      <Card
+        className={`flex flex-col transition-all shadow-2xl bg-white ${
+          isExpanded
+            ? "h-[100dvh] w-[100vw] rounded-none sm:h-[90vh] sm:w-[94vw] sm:rounded-2xl md:w-[90vw]"
+            : "h-[100dvh] w-[100vw] rounded-none sm:h-[80vh] sm:w-[520px] sm:rounded-2xl md:h-[660px] md:w-[450px]"
+        }`}
+      >
         <CardHeader className="flex flex-row items-center justify-end space-y-0 pb-4 border-b">
           <Button variant="ghost" size="icon" onClick={closeVoiceUi} className="rounded-full h-8 w-8">
             <X className="h-4 w-4" />
@@ -468,9 +476,7 @@ export function ChatWidget({
           {audioMode === "batch" && !isBatchRecording && !isProcessing && !isAnswering && (
             <>
               <div className="w-24 h-24 rounded-full flex items-center justify-center" style={{ backgroundColor: "#0000F0" }}>
-                <svg className="w-14 h-14 text-white" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z" />
-                </svg>
+                <img src={iconPng} alt="Burokratt" className="w-14 h-14" />
               </div>
 
               <div className="flex flex-col items-center space-y-3 mt-8">
@@ -487,26 +493,86 @@ export function ChatWidget({
 
           {isProcessing && !isAnswering && (
             <>
+              <div className="relative flex items-center justify-center w-[70vw] h-[70vw] max-w-[360px] max-h-[360px]">
+                <div className="absolute w-[58vw] h-[58vw] max-w-[300px] max-h-[300px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(255, 165, 0, 0.10)" }}
+                />
+                <div className="absolute w-[46vw] h-[46vw] max-w-[240px] max-h-[240px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(255, 165, 0, 0.14)" }}
+                />
+                <div className="absolute w-[34vw] h-[34vw] max-w-[180px] max-h-[180px] rounded-full"
+                  style={{ backgroundColor: "rgba(255, 165, 0, 0.18)" }}
+                />
+                <div
+                  className="absolute w-[22vw] h-[22vw] max-w-[120px] max-h-[120px] rounded-full"
+                  style={{
+                    border: "3px solid rgba(255, 165, 0, 0.32)",
+                    backgroundColor: "transparent",
+                  }}
+                />
+              </div>
+
               <p className="text-lg font-semibold mt-8 mb-4 text-center" style={{ color: "#FFA500" }}>
                 Processing...
               </p>
 
-              <button
+              <Button
+                type="button"
+                variant="ghost"
                 onClick={closeVoiceUi}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+                className="p-0 rounded-full hover:bg-transparent"
+                style={{
+                  width: 56,
+                  height: 56,
+                  backgroundColor: "#F3F4F6",
+                }}
+                aria-label="Cancel"
               >
-                Click to Cancel
-              </button>
+                <div className="relative flex items-center justify-center" style={{ width: 24, height: 24 }}>
+                  <div
+                    className="absolute rounded-full"
+                    style={{
+                      width: 24,
+                      height: 24,
+                      border: "2px solid #FFA500",
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <div
+                    className="relative"
+                    style={{
+                      width: 10,
+                      height: 10,
+                      backgroundColor: "#FFA500",
+                      borderRadius: 2,
+                    }}
+                  />
+                </div>
+              </Button>
+
             </>
           )}
 
           {isAnswering && (
             <>
-              <div className="relative w-28 h-28 flex items-center justify-center">
-                <div className="absolute w-28 h-28 rounded-full bg-orange-100 animate-pulse"></div>
-                <div className="absolute w-20 h-20 rounded-full bg-orange-50"></div>
-                <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: "#FFA500" }}>
-                  <Volume2 className="h-7 w-7 text-white" />
+              <div className="relative flex items-center justify-center w-[70vw] h-[70vw] max-w-[360px] max-h-[360px]">
+                <div className="absolute w-[70vw] h-[70vw] max-w-[360px] max-h-[360px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(255, 165, 0, 0.06)" }}
+                />
+                <div className="absolute w-[58vw] h-[58vw] max-w-[300px] max-h-[300px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(255, 165, 0, 0.10)" }}
+                />
+                <div className="absolute w-[46vw] h-[46vw] max-w-[240px] max-h-[240px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(255, 165, 0, 0.14)" }}
+                />
+                <div className="absolute w-[34vw] h-[34vw] max-w-[180px] max-h-[180px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(255, 165, 0, 0.18)" }}
+                />
+
+                <div className="relative flex items-center justify-center rounded-full w-[28vw] h-[28vw] max-w-[140px] max-h-[140px]"
+                  style={{ backgroundColor: "#FFA500" }}
+                >
+                  <Volume2 className="text-white w-[12vw] h-[12vw] max-w-[54px] max-h-[54px]" />
                 </div>
               </div>
 
@@ -529,25 +595,34 @@ export function ChatWidget({
 
           {audioMode === "batch" && isBatchRecording && (
             <>
-              <div className="relative w-28 h-28 flex items-center justify-center">
-                <div className="absolute w-28 h-28 rounded-full bg-blue-100 animate-pulse"></div>
-                <div className="absolute w-20 h-20 rounded-full bg-blue-50"></div>
-                <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: "#0000F0" }}>
-                  <Mic className="h-7 w-7 text-white" />
+              <div className="relative flex items-center justify-center w-[70vw] h-[70vw] max-w-[360px] max-h-[360px]">
+                <div className="absolute w-[60vw] h-[60vw] max-w-[310px] max-h-[310px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(0, 0, 240, 0.05)" }}
+                />
+                <div className="absolute w-[46vw] h-[46vw] max-w-[240px] max-h-[240px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(0, 0, 240, 0.07)" }}
+                />
+                <div className="absolute w-[30vw] h-[30vw] max-w-[160px] max-h-[160px] rounded-full animate-pulse"
+                  style={{ backgroundColor: "rgba(0, 0, 240, 0.10)" }}
+                />
+                <div className="relative flex items-center justify-center rounded-full w-[20vw] h-[20vw] max-w-[100px] max-h-[100px]"
+                  style={{ backgroundColor: "#0000F0" }}
+                >
+                  <Mic className="text-white w-[10vw] h-[10vw] max-w-[44px] max-h-[44px]" />
                 </div>
               </div>
 
-              <p className="text-lg font-semibold mt-6 mb-4 text-center" style={{ color: "#0000F0" }}>
+              <p className="text-lg font-semibold mt-8 mb-6 text-center" style={{ color: "#0000F0" }}>
                 Listening
               </p>
 
               <div className="flex flex-col items-center space-y-3">
                 <button
                   onClick={stopBatchRecording}
-                  className="w-12 h-12 rounded-full flex items-center justify-center hover:opacity-90 transition-all shadow-lg"
+                  className="w-12 h-12 rounded-full flex items-center justify-center hover:opacity-90 transition-all"
                   style={{ backgroundColor: "#0000F0" }}
                 >
-                  <Mic className="h-6 w-6 text-white" />
+                  <Mic className="h-5 w-5 text-white" />
                 </button>
                 <p className="text-sm text-gray-800 font-medium">Click to Generate Answer</p>
               </div>
@@ -559,13 +634,17 @@ export function ChatWidget({
   }
 
   return (
-    <Card className={`flex flex-col ${isExpanded ? "h-[90vh]" : "h-[660px]"} ${isExpanded ? "w-[90vw]" : "w-[450px]"} shadow-2xl rounded-2xl transition-all`}>
+    <Card
+      className={`flex flex-col transition-all shadow-2xl ${
+        isExpanded
+          ? "h-[100dvh] w-[100vw] rounded-none sm:h-[90vh] sm:w-[94vw] sm:rounded-2xl md:w-[90vw]"
+          : "h-[100dvh] w-[100vw] rounded-none sm:h-[80vh] sm:w-[520px] sm:rounded-2xl md:h-[660px] md:w-[450px]"
+      }`}
+    >
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 border-b">
         <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: "#0000F0" }}>
-            <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z" />
-            </svg>
+          <div className="w-8 h-8 rounded-full flex items-center justify-center">
+            <img src={blueIconPng} alt="Burokratt" className="w-8 h-8" />
           </div>
           <CardTitle className="text-lg font-semibold" style={{ color: "#0000F0" }}>
             BÜROKRATT
@@ -586,7 +665,7 @@ export function ChatWidget({
         </div>
       </CardHeader>
 
-      <CardContent className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
+      <CardContent className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-gray-50">
         <div className="space-y-4 text-center">
           <h2 className="text-xl font-semibold text-gray-900">Hi, I'm your AI-based digital assistant</h2>
           <p className="text-sm text-gray-600 leading-relaxed">Hello! You can ask me for advice on ID card software and electronic use.</p>

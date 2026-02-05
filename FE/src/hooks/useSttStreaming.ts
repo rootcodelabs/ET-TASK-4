@@ -68,7 +68,6 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
   const [isReady, setIsReady] = useState(false);
   const [partialText, setPartialText] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [finalTranscript, setFinalTranscript] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -131,7 +130,7 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
       setPartialText("");
       if (finalBufferRef.current.length > 0) {
         const combined = finalBufferRef.current.join(" ").trim();
-        setFinalTranscript(combined);
+        // keep combined transcript in ref only
         if (combined && onFinalTranscriptRef.current) {
           onFinalTranscriptRef.current(combined);
         }
@@ -160,7 +159,6 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
 
     setError(null);
     setPartialText("");
-    setFinalTranscript("");
     setIsConnecting(true);
     setIsReady(false);
     readyRef.current = false;
@@ -248,7 +246,6 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
               text
             );
             finalBufferRef.current = combined ? [combined] : [];
-            setFinalTranscript(combined);
             if (onFinal) onFinal(text, message);
           }
           return;
