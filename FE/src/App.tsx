@@ -11,27 +11,25 @@ function App() {
   return (
     <div className="min-h-screen bg-white">
       {/* Floating Chat Widget */}
-      {isChatOpen ? (
-        <div className="fixed inset-0 z-50 flex items-stretch justify-center sm:inset-auto sm:bottom-6 sm:right-6 sm:block">
+      <div className="fixed bottom-6 right-6 z-50">
+        {isChatOpen ? (
           <ChatWidget 
             isOpen={isChatOpen}
             isExpanded={isExpanded}
             onClose={() => setIsChatOpen(false)}
             onToggleExpand={() => setIsExpanded(!isExpanded)}
           />
-        </div>
-      ) : (
-        <div className="fixed bottom-0 right-0 z-50 p-4 sm:bottom-6 sm:right-6 sm:p-0">
+        ) : (
           <Button
             onClick={() => setIsChatOpen(true)}
-            className="h-12 w-12 sm:h-14 sm:w-14 rounded-full shadow-lg"
+            className="h-14 w-14 rounded-full shadow-lg"
             style={{ backgroundColor: '#0000F0' }}
             size="icon"
           >
             <img src={iconPng} alt="Burokratt" className="h-6 w-6" />
           </Button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
