@@ -42,5 +42,8 @@ AZURE_OPENAI_KEY=...
 AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com
 AZURE_OPENAI_DEPLOYMENT=your-deployment-name
 AZURE_OPENAI_API_VERSION=2024-04-01-preview
-AZURE_TTS_VOICE=et-EE-AnuNeural
+
+AZURE_TTS_VOICE_ET=et-EE-AnuNeural
+AZURE_TTS_VOICE_EN=en-US-JennyNeural
+AZURE_TTS_VOICE_RU=ru-RU-SvetlanaNeural
 ```

@@ -45,6 +45,9 @@ app.post("/api/chat", async (req, res) => {
   const message = typeof req.body?.message === "string" ? req.body.message : "";
   const clientId =
     typeof req.body?.clientId === "string" ? req.body.clientId : undefined;
+  const language = normalizeLanguage(
+    typeof req.body?.language === "string" ? req.body.language : "et-EE"
+  );
 
   if (!message.trim()) {
     return res.status(400).json({ error: "Message is required" });
@@ -63,6 +66,13 @@ app.post("/api/chat", async (req, res) => {
   }
 
   try {
+    const systemPrompt =
+      language.startsWith("en")
+        ? "You are a helpful assistant. Answer only in English. Be concise and clear."
+        : language.startsWith("ru")
+        ? "You are a helpful assistant. Answer only in Russian. Be concise and clear."
+        : "You are a helpful assistant. Answer only in Estonian. Be concise and clear.";
+
     const response = await fetch(buildAzureChatUrl(), {
       method: "POST",
       headers: {
@@ -73,8 +83,7 @@ app.post("/api/chat", async (req, res) => {
         messages: [
           {
             role: "system",
-            content:
-              "You are a helpful assistant. Answer only in Estonian. Be concise and clear.",
+            content: systemPrompt,
           },
           { role: "user", content: message },
         ],
@@ -114,23 +123,22 @@ app.post(
       return res.status(400).json({ error: "Audio file is required" });
     }
 
-    const key = getEnv("AZURE_SPEECH_KEY");
-    const region = getEnv("AZURE_SPEECH_REGION");
-    if (!key || !region) {
-      return res.status(500).json({ error: "Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION" });
-    }
+    const language = normalizeLanguage(
+      typeof req.body?.language === "string" ? req.body.language : "et-EE"
+    );
 
     try {
       if (!file.mimetype.includes("wav")) {
         return res.status(400).json({ error: "Only WAV PCM 16kHz mono is supported" });
       }
 
-      const result = await transcribeBatch(
-        key,
-        region,
-        file.buffer,
-        "et-EE"
-      );
+      const key = getEnv("AZURE_SPEECH_KEY");
+      const region = getEnv("AZURE_SPEECH_REGION");
+      if (!key || !region) {
+        return res.status(500).json({ error: "Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION" });
+      }
+
+      const result = await transcribeBatch(key, region, file.buffer, language);
 
       return res.json({ text: result.text || "", duration_ms: result.durationMs });
     } catch (err) {
@@ -140,7 +148,29 @@ app.post(
   }
 );
 
-const synthesizeSpeech = async (text: string) => {
+const selectVoiceForLanguage = (language: string) => {
+  if (language.startsWith("en")) {
+    return (
+      getEnv("AZURE_TTS_VOICE_EN") ||
+      getEnv("AZURE_TTS_VOICE") ||
+      "en-US-JennyNeural"
+    );
+  }
+  if (language.startsWith("ru")) {
+    return (
+      getEnv("AZURE_TTS_VOICE_RU") ||
+      getEnv("AZURE_TTS_VOICE") ||
+      "ru-RU-SvetlanaNeural"
+    );
+  }
+  return (
+    getEnv("AZURE_TTS_VOICE_ET") ||
+    getEnv("AZURE_TTS_VOICE") ||
+    "et-EE-AnuNeural"
+  );
+};
+
+const synthesizeSpeech = async (text: string, language: string) => {
   const key = getEnv("AZURE_SPEECH_KEY");
   const region = getEnv("AZURE_SPEECH_REGION");
   if (!key || !region) {
@@ -148,11 +178,8 @@ const synthesizeSpeech = async (text: string) => {
   }
 
   const speechConfig = speechsdk.SpeechConfig.fromSubscription(key, region);
-  speechConfig.speechSynthesisLanguage = "et-EE";
-  const voiceName = getEnv("AZURE_TTS_VOICE");
-  if (voiceName) {
-    speechConfig.speechSynthesisVoiceName = voiceName;
-  }
+  speechConfig.speechSynthesisLanguage = language;
+  speechConfig.speechSynthesisVoiceName = selectVoiceForLanguage(language);
 
   return new Promise<Buffer>((resolve, reject) => {
     const synthesizer = new speechsdk.SpeechSynthesizer(speechConfig);
@@ -176,12 +203,15 @@ const synthesizeSpeech = async (text: string) => {
 
 app.post("/api/tts", async (req, res) => {
   const text = typeof req.body?.text === "string" ? req.body.text : "";
+  const language = normalizeLanguage(
+    typeof req.body?.language === "string" ? req.body.language : "et-EE"
+  );
   if (!text.trim()) {
     return res.status(400).json({ error: "Text is required" });
   }
 
   try {
-    const audioBuffer = await synthesizeSpeech(text);
+    const audioBuffer = await synthesizeSpeech(text, language);
     res.setHeader("Content-Type", "audio/wav");
     res.send(audioBuffer);
   } catch (err) {

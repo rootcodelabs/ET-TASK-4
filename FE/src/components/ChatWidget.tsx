@@ -1,15 +1,20 @@
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AudioLines, Mic, Maximize2, X, Volume2 } from "lucide-react"
 import type { Message } from "@/types"
 import { useSttStreaming } from "@/hooks/useSttStreaming"
+import { useAudioStream } from "@/hooks/useAudioStream"
 import { chatService } from "@/services/chatService"
 import pcmWorkletSource from "@/audio/pcmWorkletProcessor.js?raw"
 
 const iconPng = "/assets/icon.png"
 const blueIconPng = "/assets/icon-blue.png"
+const STT_PROVIDER = (import.meta as any).env?.VITE_STT_PROVIDER || "cloud"
+if (typeof window !== "undefined") {
+  console.log(`[STT] Provider (ChatWidget): ${STT_PROVIDER}`)
+}
 
 interface ChatWidgetProps {
   isOpen?: boolean
@@ -81,6 +86,9 @@ export function ChatWidget({
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null)
   const [ttsLoadingMessageId, setTtsLoadingMessageId] = useState<string | null>(null)
   const [isBatchTtsLoading, setIsBatchTtsLoading] = useState(false)
+  const [openSourceSessionId, setOpenSourceSessionId] = useState<string | null>(null)
+  const [openSourcePartial, setOpenSourcePartial] = useState("")
+  const [selectedLanguage, setSelectedLanguage] = useState<"et-EE" | "en-US" | "ru-RU">("et-EE")
   const answeringRef = useRef(false)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -127,7 +135,7 @@ export function ChatWidget({
     localStorage.setItem("burokratt_client_id", clientId)
 
     try {
-      const reply = await chatService.getAssistantReply(trimmed, clientId)
+      const reply = await chatService.getAssistantReply(trimmed, clientId, selectedLanguage)
       const aiResponse: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
@@ -151,7 +159,7 @@ export function ChatWidget({
         return [...withoutThinking, aiResponse]
       })
     }
-  }, [])
+  }, [selectedLanguage])
 
   const handleSend = useCallback(() => {
     if (!inputValue.trim()) return
@@ -180,7 +188,7 @@ export function ChatWidget({
     error: streamError,
     partialText,
   } = useSttStreaming({
-    language: "et-EE",
+    language: selectedLanguage,
     clientId:
       localStorage.getItem("burokratt_client_id") ||
       `client_${Math.random().toString(36).slice(2, 11)}`,
@@ -201,18 +209,50 @@ export function ChatWidget({
     },
   })
 
+  const isOpenSource = useMemo(() => STT_PROVIDER === "open_source", [])
+
+  const {
+    connect: osConnect,
+    disconnect: osDisconnect,
+    startRecording: osStartRecording,
+    stopRecording: osStopRecording,
+    isConnected: osConnected,
+    isRecording: osRecording,
+    error: osError,
+  } = useAudioStream(openSourceSessionId, (data: any) => {
+    if (!data) return
+    const text = data.text || data.transcript || ""
+    if (data.type && data.type.toString().includes("partial")) {
+      setOpenSourcePartial(text)
+      setLiveTranscript(text)
+      return
+    }
+    if (data.type && data.type.toString().includes("final")) {
+      if (text) {
+        setInputValue((prev) => (prev ? `${prev} ${text}` : text))
+      }
+      setOpenSourcePartial("")
+      setLiveTranscript("")
+    }
+  })
+
   const createBatchSession = useCallback(async () => {
     const clientId =
       localStorage.getItem("burokratt_client_id") || `client_${Math.random().toString(36).slice(2, 11)}`
     localStorage.setItem("burokratt_client_id", clientId)
 
-    const session = await chatService.createAudioSession(clientId)
+    const session = await chatService.createAudioSession(clientId, selectedLanguage)
     return session.session_id as string
-  }, [])
+  }, [selectedLanguage])
 
   const closeVoiceUi = useCallback(() => {
     if (audioMode === "realtime") {
-      stopStreaming()
+      if (isOpenSource) {
+        osStopRecording()
+        osDisconnect()
+      } else {
+        stopStreaming()
+      }
     }
 
     if (isBatchRecording) {
@@ -231,7 +271,8 @@ export function ChatWidget({
     setIsAnswering(false)
     setIsBatchRecording(false)
     setLiveTranscript("")
-  }, [audioMode, isBatchRecording, stopStreaming])
+    setOpenSourcePartial("")
+  }, [audioMode, isBatchRecording, isOpenSource, osDisconnect, osStopRecording, stopStreaming])
 
   const buildWavBlob = (chunks: Int16Array[], sampleRate = 16000) => {
     const totalLength = chunks.reduce((sum, c) => sum + c.length, 0)
@@ -304,7 +345,7 @@ export function ChatWidget({
       const audioBlob = buildWavBlob(batchPcmChunksRef.current)
       batchPcmChunksRef.current = []
       const sId = await createBatchSession()
-      const result = await chatService.transcribeBatch(sId, audioBlob)
+      const result = await chatService.transcribeBatch(sId, audioBlob, selectedLanguage)
       if (result.text) {
         setInputValue((prev) => (prev ? prev + " " : "") + result.text)
 
@@ -316,7 +357,7 @@ export function ChatWidget({
         }
         setMessages((prev) => [...prev, userMsg])
 
-        const reply = await chatService.getAssistantReply(result.text)
+        const reply = await chatService.getAssistantReply(result.text, undefined, selectedLanguage)
         const replyText = reply.text || "Vabandust, ma ei saanud vastust."
 
         const aiMsg: Message = {
@@ -331,7 +372,7 @@ export function ChatWidget({
         answeringRef.current = true
 
         setIsBatchTtsLoading(true)
-        const audioData = await chatService.synthesizeSpeech(replyText)
+        const audioData = await chatService.synthesizeSpeech(replyText, selectedLanguage)
         setIsBatchTtsLoading(false)
         const blob = new Blob([audioData], { type: "audio/wav" })
         const url = URL.createObjectURL(blob)
@@ -379,7 +420,7 @@ export function ChatWidget({
       }
 
       setTtsLoadingMessageId(message.id)
-      const audioData = await chatService.synthesizeSpeech(text)
+      const audioData = await chatService.synthesizeSpeech(text, selectedLanguage)
       setTtsLoadingMessageId(null)
       const blob = new Blob([audioData], { type: "audio/wav" })
       const url = URL.createObjectURL(blob)
@@ -399,7 +440,7 @@ export function ChatWidget({
       setPlayingMessageId(null)
       setTtsLoadingMessageId(null)
     }
-  }, [playingMessageId])
+  }, [playingMessageId, selectedLanguage])
 
   const handleMicClick = useCallback(async () => {
     setAudioMode("batch")
@@ -411,12 +452,23 @@ export function ChatWidget({
     setIsVoiceModalOpen(true)
 
     try {
-      await startStreaming()
+      if (isOpenSource) {
+        let sid = openSourceSessionId
+        if (!sid) {
+          sid = await createBatchSession()
+          setOpenSourceSessionId(sid)
+        }
+        osConnect(sid)
+        await new Promise((resolve) => setTimeout(resolve, 150))
+        await osStartRecording("realtime", selectedLanguage)
+      } else {
+        await startStreaming()
+      }
     } catch (error) {
       console.error("Failed to start streaming:", error)
       setIsVoiceModalOpen(false)
     }
-  }, [startStreaming])
+  }, [createBatchSession, isOpenSource, openSourceSessionId, osConnect, osStartRecording, selectedLanguage, startStreaming])
 
   const startBatchRecording = useCallback(async () => {
     try {
@@ -462,6 +514,31 @@ export function ChatWidget({
   const showModalOverlay = isVoiceModalOpen && audioMode === "batch"
   const showFooterOverlay = isVoiceModalOpen && audioMode === "realtime"
 
+  const effectiveStreamError = isOpenSource ? osError : streamError
+  const effectivePartialText = isOpenSource ? openSourcePartial : partialText
+  const effectiveIsStreaming = isOpenSource ? osRecording : isStreaming
+  const effectiveIsConnecting = isOpenSource ? (!osConnected && isVoiceModalOpen) : isConnecting
+  const effectiveIsReady = isOpenSource ? osConnected : isReady
+
+  const statusText =
+    selectedLanguage === "en-US"
+      ? effectiveIsConnecting
+        ? "Microphone starting..."
+        : effectiveIsReady || effectiveIsStreaming
+        ? "Listening..."
+        : "Ready"
+      : selectedLanguage === "ru-RU"
+      ? effectiveIsConnecting
+        ? "Микрофон запускается..."
+        : effectiveIsReady || effectiveIsStreaming
+        ? "Слушаю..."
+        : "Готово"
+      : effectiveIsConnecting
+      ? "Mikrofon käivitub..."
+      : effectiveIsReady || effectiveIsStreaming
+      ? "Kuulan..."
+      : "Valmis"
+
   if (showModalOverlay) {
     return (
       <Card
@@ -478,7 +555,7 @@ export function ChatWidget({
         </CardHeader>
 
         <CardContent className="flex-1 flex flex-col items-center justify-center py-8 px-4 overflow-hidden">
-          {streamError && <p className="text-red-500 mb-4">{streamError}</p>}
+          {effectiveStreamError && <p className="text-red-500 mb-4">{effectiveStreamError}</p>}
 
           {audioMode === "batch" && !isBatchRecording && !isProcessing && !isAnswering && (
             <>
@@ -663,7 +740,17 @@ export function ChatWidget({
           </CardTitle>
         </div>
 
-        <div className="flex items-center space-x-1">
+        <div className="flex items-center space-x-2">
+          <select
+            value={selectedLanguage}
+            onChange={(e) => setSelectedLanguage(e.target.value as "et-EE" | "en-US" | "ru-RU")}
+            className="h-8 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-700"
+            aria-label="Language"
+          >
+            <option value="et-EE">Eesti</option>
+            <option value="en-US">English</option>
+            <option value="ru-RU">Русский</option>
+          </select>
           {onToggleExpand && (
             <Button variant="ghost" size="icon" onClick={onToggleExpand} className="rounded-full h-8 w-8">
               <Maximize2 className="h-4 w-4" />
@@ -735,10 +822,10 @@ export function ChatWidget({
               <div className="flex items-center space-x-2 w-full">
                 <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
                 <p className="text-sm text-blue-600 font-medium">
-                  {isConnecting ? "Mikrofon käivitub..." : isReady || isStreaming ? "Kuulan..." : "Valmis"}
+                  {statusText}
                 </p>
-                {partialText ? (
-                  <p className="text-sm text-gray-500 truncate">- {partialText}</p>
+                {effectivePartialText ? (
+                  <p className="text-sm text-gray-500 truncate">- {effectivePartialText}</p>
                 ) : (
                   <VoiceWave />
                 )}
@@ -754,7 +841,7 @@ export function ChatWidget({
               <X className="h-5 w-5 text-gray-600" />
             </Button>
 
-            {isStreaming || isConnecting || isReady ? (
+            {effectiveIsStreaming || effectiveIsConnecting || effectiveIsReady ? (
               <Button
                 variant="ghost"
                 size="icon"
@@ -768,7 +855,7 @@ export function ChatWidget({
                 variant="ghost"
                 size="icon"
                 onClick={() => {
-                  const text = (partialText || "").trim()
+                  const text = (effectivePartialText || "").trim()
                   closeVoiceUi()
                   if (text) sendUserMessage(text)
                 }}
@@ -838,3 +925,6 @@ export function ChatWidget({
     </Card>
   )
 }
+
+
+

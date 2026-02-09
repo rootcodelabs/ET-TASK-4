@@ -33,17 +33,18 @@ export const chatService = {
     return response.data;
   },
 
-  async createAudioSession(clientId: string): Promise<{ session_id: string }> {
+  async createAudioSession(clientId: string, languageCode: string): Promise<{ session_id: string }> {
     const response = await axiosInstance.post('/api/sessions/create', {
       client_id: clientId,
-      language_code: "et-EE"  // Estonian language
+      language_code: languageCode,
     });
     return response.data;
   },
 
-  async transcribeBatch(sessionId: string, audioBlob: Blob): Promise<TranscriptionResponse> {
+  async transcribeBatch(sessionId: string, audioBlob: Blob, languageCode: string): Promise<TranscriptionResponse> {
     const formData = new FormData();
     formData.append('audio', audioBlob, 'audio.wav');
+    formData.append('language', languageCode);
 
     const response = await axiosInstance.post(`/api/transcribe/batch/${sessionId}`, formData, {
       headers: {
@@ -54,16 +55,17 @@ export const chatService = {
     return response.data;
   },
 
-  async getAssistantReply(message: string, clientId?: string): Promise<{ text: string }> {
+  async getAssistantReply(message: string, clientId?: string, languageCode?: string): Promise<{ text: string }> {
     const response = await llmAxios.post('/api/chat', {
       message,
       clientId,
+      language: languageCode,
     });
     return response.data;
   },
 
-  async synthesizeSpeech(text: string): Promise<ArrayBuffer> {
-    const response = await llmAxios.post('/api/tts', { text }, { responseType: 'arraybuffer' });
+  async synthesizeSpeech(text: string, languageCode?: string): Promise<ArrayBuffer> {
+    const response = await llmAxios.post('/api/tts', { text, language: languageCode }, { responseType: 'arraybuffer' });
     return response.data;
   },
 };
