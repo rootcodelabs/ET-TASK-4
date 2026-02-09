@@ -79,8 +79,9 @@ export function ChatWidget({
   const [isBatchRecording, setIsBatchRecording] = useState(false)
   const [liveTranscript, setLiveTranscript] = useState("")
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null)
+  const [ttsLoadingMessageId, setTtsLoadingMessageId] = useState<string | null>(null)
+  const [isBatchTtsLoading, setIsBatchTtsLoading] = useState(false)
   const answeringRef = useRef(false)
-  const pendingBatchRef = useRef<{ question: string; answer: string } | null>(null)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const batchAudioContextRef = useRef<AudioContext | null>(null)
@@ -307,13 +308,31 @@ export function ChatWidget({
       if (result.text) {
         setInputValue((prev) => (prev ? prev + " " : "") + result.text)
 
+        const userMsg: Message = {
+          id: `${Date.now()}_q`,
+          role: "user",
+          content: result.text,
+          timestamp: new Date(),
+        }
+        setMessages((prev) => [...prev, userMsg])
+
         const reply = await chatService.getAssistantReply(result.text)
         const replyText = reply.text || "Vabandust, ma ei saanud vastust."
 
+        const aiMsg: Message = {
+          id: `${Date.now()}_a`,
+          role: "assistant",
+          content: replyText,
+          timestamp: new Date(),
+        }
+        setMessages((prev) => [...prev, aiMsg])
+
         setIsAnswering(true)
         answeringRef.current = true
-        pendingBatchRef.current = { question: result.text, answer: replyText }
+
+        setIsBatchTtsLoading(true)
         const audioData = await chatService.synthesizeSpeech(replyText)
+        setIsBatchTtsLoading(false)
         const blob = new Blob([audioData], { type: "audio/wav" })
         const url = URL.createObjectURL(blob)
         const audio = new Audio(url)
@@ -322,23 +341,6 @@ export function ChatWidget({
           URL.revokeObjectURL(url)
           setIsAnswering(false)
           answeringRef.current = false
-          const pending = pendingBatchRef.current
-          if (pending) {
-            const userMsg: Message = {
-              id: `${Date.now()}_q`,
-              role: "user",
-              content: pending.question,
-              timestamp: new Date(),
-            }
-            const aiMsg: Message = {
-              id: `${Date.now()}_a`,
-              role: "assistant",
-              content: pending.answer,
-              timestamp: new Date(),
-            }
-            setMessages((prev) => [...prev, userMsg, aiMsg])
-            pendingBatchRef.current = null
-          }
           audioRef.current = null
           setIsVoiceModalOpen(false)
         }
@@ -348,9 +350,11 @@ export function ChatWidget({
       console.error("Batch transcription failed:", err)
       answeringRef.current = false
       setIsAnswering(false)
+      setIsBatchTtsLoading(false)
       setIsVoiceModalOpen(false)
     } finally {
       setIsProcessing(false)
+      setIsBatchTtsLoading(false)
     }
   }, [createBatchSession, isBatchRecording])
 
@@ -374,7 +378,9 @@ export function ChatWidget({
         audioRef.current = null
       }
 
+      setTtsLoadingMessageId(message.id)
       const audioData = await chatService.synthesizeSpeech(text)
+      setTtsLoadingMessageId(null)
       const blob = new Blob([audioData], { type: "audio/wav" })
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
@@ -391,6 +397,7 @@ export function ChatWidget({
     } catch (err) {
       console.error("TTS playback failed:", err)
       setPlayingMessageId(null)
+      setTtsLoadingMessageId(null)
     }
   }, [playingMessageId])
 
@@ -576,9 +583,14 @@ export function ChatWidget({
                 </div>
               </div>
 
-              <p className="text-lg font-semibold mt-6 mb-4 text-center" style={{ color: "#FFA500" }}>
-                Answering
-              </p>
+              <div className="flex flex-col items-center mt-6 mb-4 space-y-2">
+                <p className="text-lg font-semibold text-center" style={{ color: "#FFA500" }}>
+                  {isBatchTtsLoading ? "Preparing voice..." : "Answering"}
+                </p>
+                {isBatchTtsLoading && (
+                  <div className="h-5 w-5 rounded-full border-2 border-orange-300 border-t-orange-500 animate-spin" />
+                )}
+              </div>
 
               <div className="flex flex-col items-center space-y-3">
                 <button
@@ -690,8 +702,13 @@ export function ChatWidget({
                         onClick={() => handleSpeak(message)}
                         className={`p-2 rounded-full ${playingMessageId === message.id ? "bg-gray-200" : "bg-gray-100"} hover:bg-gray-200`}
                         aria-label="Play response"
+                        disabled={ttsLoadingMessageId === message.id}
                       >
-                        <Volume2 className="h-4 w-4 text-gray-700" />
+                        {ttsLoadingMessageId === message.id ? (
+                          <div className="h-4 w-4 rounded-full border-2 border-gray-300 border-t-gray-600 animate-spin" />
+                        ) : (
+                          <Volume2 className="h-4 w-4 text-gray-700" />
+                        )}
                       </button>
                     </div>
                   )}
