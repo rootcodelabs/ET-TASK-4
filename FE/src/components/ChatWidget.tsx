@@ -111,6 +111,7 @@ export function ChatWidget({
   const sendUserMessage = useCallback(async (text: string) => {
     const trimmed = (text || "").trim()
     if (!trimmed) return
+    setInputValue("")
 
     const newMessage: Message = {
       id: Date.now().toString(),
@@ -273,6 +274,20 @@ export function ChatWidget({
     setLiveTranscript("")
     setOpenSourcePartial("")
   }, [audioMode, isBatchRecording, isOpenSource, osDisconnect, osStopRecording, stopStreaming])
+
+  const interruptAnswering = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+    setIsAnswering(false)
+    setIsProcessing(false)
+    setIsBatchRecording(false)
+    setLiveTranscript("")
+    // Keep the batch modal open and return to the initial batch UI
+    setAudioMode("batch")
+    setIsVoiceModalOpen(true)
+  }, [])
 
   const buildWavBlob = (chunks: Int16Array[], sampleRate = 16000) => {
     const totalLength = chunks.reduce((sum, c) => sum + c.length, 0)
@@ -671,7 +686,7 @@ export function ChatWidget({
 
               <div className="flex flex-col items-center space-y-3">
                 <button
-                  onClick={closeVoiceUi}
+                  onClick={interruptAnswering}
                   className="w-12 h-12 rounded-full flex items-center justify-center hover:opacity-90 transition-all shadow-lg"
                   style={{ backgroundColor: "#FFA500" }}
                 >
@@ -765,15 +780,17 @@ export function ChatWidget({
       </CardHeader>
 
       <CardContent className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-gray-50">
-        <div className="space-y-4 text-center">
-          <h2 className="text-xl font-semibold text-gray-900">Hi, I'm your AI-based digital assistant</h2>
-          <p className="text-sm text-gray-600 leading-relaxed">Hello! You can ask me for advice on ID card software and electronic use.</p>
-          <p className="text-sm text-gray-600 leading-relaxed">
-            I am an artificial intelligence-based chatbot and I am still learning, be sure to check the information from the cited sources. How can I help?
-          </p>
-        </div>
+        {messages.length <= 3 && !isVoiceModalOpen && !inputValue.trim() && (
+          <div className="space-y-4 text-center">
+            <h2 className="text-xl font-semibold text-gray-900">Hi, I'm your AI-based digital assistant</h2>
+            <p className="text-sm text-gray-600 leading-relaxed">Hello! You can ask me for advice on ID card software and electronic use.</p>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              I am an artificial intelligence-based chatbot and I am still learning, be sure to check the information from the cited sources. How can I help?
+            </p>
+          </div>
+        )}
 
-        {(messages.length > 3 || (audioMode === "realtime" && isVoiceModalOpen && liveTranscript)) && (
+        {(messages.length > 3) && (
           <div className="space-y-3 mt-6">
             {messages.slice(3).map((message) => (
               <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -801,15 +818,7 @@ export function ChatWidget({
                   )}
                 </div>
               </div>
-            ))}
-            {audioMode === "realtime" && isVoiceModalOpen && liveTranscript && (
-              <div className="flex justify-start">
-                <div className="max-w[80%] rounded-lg px-4 py-2 bg-white text-gray-900 border">
-                  <p className="text-sm">{liveTranscript}</p>
-                </div>
-              </div>
-            )}
-          </div>
+            ))}</div>
         )}
 
         <div ref={messagesEndRef} />
@@ -879,17 +888,30 @@ export function ChatWidget({
             )}
           </div>
         ) : (
-          <div className="flex items-center space-x-2">
-            <Input
-              placeholder="Ask Bürokratt by typing or speaking..."
-              value={inputValue}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyPress as any}
-              className="flex-1 rounded-full border-gray-300"
-            />
+          <div className="flex items-end space-x-2">
+            <div className="flex-1 min-w-0 rounded-2xl border border-gray-300 bg-white px-4 py-2 overflow-hidden">
+              <textarea
+                placeholder="Ask Bürokratt by typing or speaking..."
+                value={inputValue}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setInputValue(e.target.value)}
+                onKeyDown={handleKeyPress as any}
+                rows={2}
+                className="w-full bg-transparent text-sm leading-5 resize-none border-0 outline-none focus:ring-0"
+                style={{
+                  minHeight: 40,
+                  maxHeight: 120,
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
 
             <Button variant="ghost" size="icon" onClick={handleMicClick} className="shrink-0 rounded-full h-10 w-10 bg-gray-100 hover:bg-gray-200">
-              <Mic className="h-5 w-5 text-gray-600" />
+              <AudioLines className="h-5 w-5 text-gray-600" />
             </Button>
 
             <Button
@@ -916,7 +938,7 @@ export function ChatWidget({
                   <polygon points="22 2 15 22 11 13 2 9 22 2" />
                 </svg>
               ) : (
-                <AudioLines className="h-5 w-5 text-gray-600" />
+                <Mic className="h-5 w-5 text-gray-600" />
               )}
             </Button>
           </div>
@@ -925,6 +947,16 @@ export function ChatWidget({
     </Card>
   )
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
