@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { AudioLines, Mic, Maximize2, X, Volume2 } from "lucide-react"
 import type { Message } from "@/types"
 import { useSttStreaming } from "@/hooks/useSttStreaming"
@@ -11,10 +10,6 @@ import pcmWorkletSource from "@/audio/pcmWorkletProcessor.js?raw"
 
 const iconPng = "/assets/icon.png"
 const blueIconPng = "/assets/icon-blue.png"
-const STT_PROVIDER = (import.meta as any).env?.VITE_STT_PROVIDER || "cloud"
-if (typeof window !== "undefined") {
-  console.log(`[STT] Provider (ChatWidget): ${STT_PROVIDER}`)
-}
 
 interface ChatWidgetProps {
   isOpen?: boolean
@@ -89,6 +84,7 @@ export function ChatWidget({
   const [openSourceSessionId, setOpenSourceSessionId] = useState<string | null>(null)
   const [openSourcePartial, setOpenSourcePartial] = useState("")
   const [selectedLanguage, setSelectedLanguage] = useState<"et-EE" | "en-US" | "ru-RU">("et-EE")
+  const [provider, setProvider] = useState<"cloud" | "onprem">("cloud")
   const answeringRef = useRef(false)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -97,6 +93,7 @@ export function ChatWidget({
   const batchWorkletNodeRef = useRef<AudioWorkletNode | null>(null)
   const batchPcmChunksRef = useRef<Int16Array[]>([])
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const accumulatedTranscriptRef = useRef<string>("")
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -190,6 +187,7 @@ export function ChatWidget({
     partialText,
   } = useSttStreaming({
     language: selectedLanguage,
+    provider: provider,
     clientId:
       localStorage.getItem("burokratt_client_id") ||
       `client_${Math.random().toString(36).slice(2, 11)}`,
@@ -210,7 +208,45 @@ export function ChatWidget({
     },
   })
 
-  const isOpenSource = useMemo(() => STT_PROVIDER === "open_source", [])
+  const isOpenSource = useMemo(() => provider === "onprem", [provider])
+
+  const handleOpenSourceTranscriptionRef = useRef<((data: any) => void) | null>(null)
+  
+  handleOpenSourceTranscriptionRef.current = (data: any) => {
+    if (!data) return
+    const text = data.text || data.transcript || ""
+    
+    if (data.type && data.type.toString().includes("partial")) {
+      setOpenSourcePartial(text)
+      setLiveTranscript(text)
+      // Accumulate partials in ref
+      const currentAccumulated = accumulatedTranscriptRef.current
+      accumulatedTranscriptRef.current = currentAccumulated 
+        ? `${currentAccumulated} ${text}` 
+        : text
+      return
+    }
+    
+    if (data.type && data.type.toString().includes("final")) {
+      // Add final to accumulated
+      const currentAccumulated = accumulatedTranscriptRef.current
+      accumulatedTranscriptRef.current = currentAccumulated 
+        ? `${currentAccumulated} ${text}` 
+        : text
+      const fullText = accumulatedTranscriptRef.current.trim()
+      
+      if (fullText) {
+        setInputValue((prev) => (prev ? `${prev} ${fullText}` : fullText))
+      }
+      setOpenSourcePartial("")
+      setLiveTranscript("")
+      accumulatedTranscriptRef.current = ""
+    }
+  }
+
+  const handleOpenSourceTranscription = useCallback((data: any) => {
+    handleOpenSourceTranscriptionRef.current?.(data)
+  }, [])
 
   const {
     connect: osConnect,
@@ -220,22 +256,7 @@ export function ChatWidget({
     isConnected: osConnected,
     isRecording: osRecording,
     error: osError,
-  } = useAudioStream(openSourceSessionId, (data: any) => {
-    if (!data) return
-    const text = data.text || data.transcript || ""
-    if (data.type && data.type.toString().includes("partial")) {
-      setOpenSourcePartial(text)
-      setLiveTranscript(text)
-      return
-    }
-    if (data.type && data.type.toString().includes("final")) {
-      if (text) {
-        setInputValue((prev) => (prev ? `${prev} ${text}` : text))
-      }
-      setOpenSourcePartial("")
-      setLiveTranscript("")
-    }
-  })
+  } = useAudioStream(openSourceSessionId, handleOpenSourceTranscription, provider)
 
   const createBatchSession = useCallback(async () => {
     const clientId =
@@ -360,7 +381,7 @@ export function ChatWidget({
       const audioBlob = buildWavBlob(batchPcmChunksRef.current)
       batchPcmChunksRef.current = []
       const sId = await createBatchSession()
-      const result = await chatService.transcribeBatch(sId, audioBlob, selectedLanguage)
+      const result = await chatService.transcribeBatch(sId, audioBlob, selectedLanguage, provider)
       if (result.text) {
         setInputValue((prev) => (prev ? prev + " " : "") + result.text)
 
@@ -387,7 +408,7 @@ export function ChatWidget({
         answeringRef.current = true
 
         setIsBatchTtsLoading(true)
-        const audioData = await chatService.synthesizeSpeech(replyText, selectedLanguage)
+        const audioData = await chatService.synthesizeSpeech(replyText, selectedLanguage, provider)
         setIsBatchTtsLoading(false)
         const blob = new Blob([audioData], { type: "audio/wav" })
         const url = URL.createObjectURL(blob)
@@ -412,7 +433,7 @@ export function ChatWidget({
       setIsProcessing(false)
       setIsBatchTtsLoading(false)
     }
-  }, [createBatchSession, isBatchRecording])
+  }, [createBatchSession, isBatchRecording, selectedLanguage, provider])
 
   const handleSpeak = useCallback(async (message: Message) => {
     if (message.role !== "assistant") return
@@ -435,7 +456,7 @@ export function ChatWidget({
       }
 
       setTtsLoadingMessageId(message.id)
-      const audioData = await chatService.synthesizeSpeech(text, selectedLanguage)
+      const audioData = await chatService.synthesizeSpeech(text, selectedLanguage, provider)
       setTtsLoadingMessageId(null)
       const blob = new Blob([audioData], { type: "audio/wav" })
       const url = URL.createObjectURL(blob)
@@ -455,7 +476,7 @@ export function ChatWidget({
       setPlayingMessageId(null)
       setTtsLoadingMessageId(null)
     }
-  }, [playingMessageId, selectedLanguage])
+  }, [playingMessageId, selectedLanguage, provider])
 
   const handleMicClick = useCallback(async () => {
     setAudioMode("batch")
@@ -473,6 +494,7 @@ export function ChatWidget({
           sid = await createBatchSession()
           setOpenSourceSessionId(sid)
         }
+        accumulatedTranscriptRef.current = ""
         osConnect(sid)
         await new Promise((resolve) => setTimeout(resolve, 150))
         await osStartRecording("realtime", selectedLanguage)
@@ -756,6 +778,16 @@ export function ChatWidget({
         </div>
 
         <div className="flex items-center space-x-2">
+          <select
+            value={provider}
+            onChange={(e) => setProvider(e.target.value as "cloud" | "onprem")}
+            className="h-8 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-700"
+            aria-label="Provider"
+            title="STT/TTS Provider"
+          >
+            <option value="cloud">Cloud</option>
+            <option value="onprem">On-Prem</option>
+          </select>
           <select
             value={selectedLanguage}
             onChange={(e) => setSelectedLanguage(e.target.value as "et-EE" | "en-US" | "ru-RU")}

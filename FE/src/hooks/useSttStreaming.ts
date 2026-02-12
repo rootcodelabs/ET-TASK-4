@@ -5,6 +5,7 @@ interface UseSttStreamingOptions {
   url?: string;
   language?: string;
   clientId?: string;
+  provider?: "cloud" | "onprem";
   onPartial?: (text: string, meta?: any) => void;
   onFinal?: (text: string, meta?: any) => void;
   onFinalTranscript?: (text: string) => void;
@@ -56,6 +57,7 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
     url = DEFAULT_URL,
     language = "et-EE",
     clientId,
+    provider = "cloud",
     onPartial,
     onFinal,
     onFinalTranscript,
@@ -199,7 +201,8 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
 
       ws.onopen = () => {
         const lang = normalizeLanguage(language);
-        ws.send(JSON.stringify({ type: "start", language: lang, clientId }));
+        const message = { type: "start", language: lang, clientId, provider };
+        ws.send(JSON.stringify(message));
         startedRef.current = true;
         stoppingRef.current = false;
         setIsStreaming(true);
@@ -221,7 +224,7 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
           setIsReady(true);
           const pending = sendBufferRef.current;
           sendBufferRef.current = [];
-          pending.forEach((chunk) => {
+          pending.forEach((chunk, index) => {
             const socket = wsRef.current;
             if (socket && socket.readyState === WebSocket.OPEN) {
               socket.send(chunk);
@@ -294,8 +297,12 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
 
       workletNode.port.onmessage = (ev) => {
         const socket = wsRef.current;
-        if (!socket || socket.readyState !== WebSocket.OPEN) return;
-        if (!startedRef.current || stoppingRef.current) return;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        if (!startedRef.current || stoppingRef.current) {
+          return;
+        }
         if (readyRef.current) {
           socket.send(ev.data);
         } else {
@@ -313,7 +320,7 @@ export function useSttStreaming(options: UseSttStreamingOptions = {}) {
       stop(false);
       throw err;
     }
-  }, [cleanupAudio, language, onError, onFinal, onPartial, onStopped, stop, url]);
+  }, [cleanupAudio, language, clientId, provider, onError, onFinal, onPartial, onStopped, stop, url]);
 
   useEffect(() => {
     return () => {

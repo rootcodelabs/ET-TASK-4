@@ -41,12 +41,16 @@ export const chatService = {
     return response.data;
   },
 
-  async transcribeBatch(sessionId: string, audioBlob: Blob, languageCode: string): Promise<TranscriptionResponse> {
+  async transcribeBatch(sessionId: string, audioBlob: Blob, languageCode: string, provider?: string): Promise<TranscriptionResponse> {
     const formData = new FormData();
     formData.append('audio', audioBlob, 'audio.wav');
     formData.append('language', languageCode);
 
-    const response = await axiosInstance.post(`/api/transcribe/batch/${sessionId}`, formData, {
+    const url = provider 
+      ? `/api/transcribe/batch/${sessionId}?provider=${provider}`
+      : `/api/transcribe/batch/${sessionId}`;
+
+    const response = await axiosInstance.post(url, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
@@ -64,8 +68,12 @@ export const chatService = {
     return response.data;
   },
 
-  async synthesizeSpeech(text: string, languageCode?: string): Promise<ArrayBuffer> {
-    const response = await llmAxios.post('/api/tts', { text, language: languageCode }, { responseType: 'arraybuffer' });
+  async synthesizeSpeech(text: string, languageCode?: string, provider?: string): Promise<ArrayBuffer> {
+    const response = await llmAxios.post('/api/tts', { 
+      text, 
+      language: languageCode,
+      provider: provider || 'cloud'
+    }, { responseType: 'arraybuffer' });
     return response.data;
   },
 };

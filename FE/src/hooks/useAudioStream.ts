@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback } from "react";
 
-const STT_PROVIDER = (import.meta as any).env?.VITE_STT_PROVIDER || "cloud";
 const OPEN_SOURCE_WS_URL =
   (import.meta as any).env?.VITE_OPEN_SOURCE_WS_URL || "ws://localhost:8080/ws/stt";
 
@@ -61,10 +60,8 @@ const floatTo16BitPCMBytes = (input: Float32Array) => {
   return out.buffer;
 };
 
-export function useAudioStream(sessionId: string | null, onTranscription?: (data: any) => void) {
+export function useAudioStream(sessionId: string | null, onTranscription?: (data: any) => void, provider: "cloud" | "onprem" = "cloud") {
   if (typeof window !== "undefined") {
-    // Log when hook is actually used (not just imported)
-    console.log(`[STT] Provider: ${STT_PROVIDER}`);
   }
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -81,7 +78,7 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
   const streamRef = useRef<MediaStream | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const vadRef = useRef<any>(null);
-  const isSpeechRef = useRef(STT_PROVIDER !== "open_source");
+  const isSpeechRef = useRef(true); // const isSpeechRef = useRef(provider !== "onprem");
   const prebufferRef = useRef<Int16Array[]>([]);
   const prebufferSamplesRef = useRef(0);
 
@@ -116,7 +113,7 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
 
   const setupVad = useCallback(
     async (stream: MediaStream, audioContext: AudioContext) => {
-      if (STT_PROVIDER !== "open_source") return null;
+      if (provider !== "onprem") return null;
       try {
         const mod = await import("@steelbrain/media-speech-detection-web");
         const create =
@@ -164,7 +161,7 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
         return null;
       }
     },
-    []
+    [provider]
   );
 
   const connect = useCallback(
@@ -202,7 +199,22 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
               return;
             }
 
-            if (data.type && data.type.startsWith("transcription_") && onTranscription) {
+            if (data.type === "stopped") {
+              // Backend finished processing, safe to disconnect after a brief delay
+              setTimeout(() => {
+                const currentWs = wsRef.current;
+                if (currentWs === ws) {
+                  try {
+                    currentWs.close();
+                  } catch {}
+                  wsRef.current = null;
+                  setIsConnected(false);
+                }
+              }, 100);
+              return;
+            }
+
+            if (data.type && (data.type.startsWith("transcription_") || data.type === "partial" || data.type === "final") && onTranscription) {
               onTranscription(data);
             }
           } catch {
@@ -271,23 +283,18 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
         ws.send(
           JSON.stringify({
             type: "start",
-            sessionId,
-            sampleRate: DEFAULT_CONFIG.sampleRate,
-            channels: DEFAULT_CONFIG.channels,
-            bitDepth: DEFAULT_CONFIG.bitDepth,
-            bufferSize: DEFAULT_CONFIG.bufferSize,
-            languageCode,
-            mode,
-            inputSampleRate: inputRate,
+            language: languageCode,
+            clientId: sessionId,
+            provider,
           })
         );
 
-        if (STT_PROVIDER === "open_source") {
-          isSpeechRef.current = false;
+        if (provider === "onprem") {
+          isSpeechRef.current = true;
           resetPrebuffer();
         }
 
-        vadRef.current = await setupVad(mediaStream, audioContext);
+        // vadRef.current = await setupVad(mediaStream, audioContext);
 
         workletNode.port.onmessage = (ev) => {
           const w = wsRef.current;
@@ -304,10 +311,12 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
           const down = downsampleBuffer(chunk, ctx.sampleRate, 16000);
           const pcmBytes = floatTo16BitPCMBytes(down);
 
-          if (STT_PROVIDER === "open_source" && !isSpeechRef.current) {
-            enqueuePrebuffer(new Int16Array(pcmBytes));
-            return;
-          }
+          
+
+          // if (provider === "onprem" && !isSpeechRef.current) {
+          //   enqueuePrebuffer(new Int16Array(pcmBytes));
+          //   return;
+          // }
 
           w.send(pcmBytes);
 
@@ -336,7 +345,7 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
         setIsRecording(false);
       }
     },
-    [sessionId]
+    [sessionId, provider]
   );
 
   const stopRecording = useCallback(() => {
@@ -374,7 +383,7 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
     }
     vadRef.current = null;
     resetPrebuffer();
-    isSpeechRef.current = STT_PROVIDER !== "open_source";
+    isSpeechRef.current = provider !== "onprem";
 
     // stop mic tracks
     try {
@@ -391,21 +400,24 @@ export function useAudioStream(sessionId: string | null, onTranscription?: (data
         ctx.close().catch(() => {});
       }
     }
-  }, [sessionId]);
+  }, [sessionId, provider]);
 
   const disconnect = useCallback(() => {
     stopRecording();
 
-    const ws = wsRef.current;
-    wsRef.current = null;
+    // Wait for "stopped" message and final transcription before closing
+    setTimeout(() => {
+      const ws = wsRef.current;
+      wsRef.current = null;
 
-    if (ws) {
-      try {
-        ws.close();
-      } catch {}
-    }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.close();
+        } catch {}
+      }
 
-    setIsConnected(false);
+      setIsConnected(false);
+    }, 2000);
   }, [stopRecording]);
 
   return {
