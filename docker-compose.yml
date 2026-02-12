@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  triton:
+    build:
+      context: .
+      dockerfile: triton.Dockerfile
+    image: triton-whisper:latest
+    container_name: triton-whisper-server
+    ports:
+      - "8000:8000"  # HTTP
+      - "8001:8001"  # gRPC
+      - "8002:8002"  # Metrics
+    volumes:
+      - ./triton_models:/models:ro
+      - ./triton_logs:/logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v2/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+    shm_size: '2gb'
+    networks:
+      - app-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: ./BE
+      dockerfile: Dockerfile
+    image: node-backend:latest
+    container_name: node-backend
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./BE/src:/app/src
+      - ./BE/uploads:/app/uploads
+    environment:
+      - TRITON_GRPC_URL=triton:8001
+      - TRITON_HTTP_URL=http://triton:8000
+      - TRITON_STT_MODEL=whisper
+      - PORT=8080
+      - NODE_ENV=development
+    env_file:
+      - ./BE/.env
+    # depends_on:
+    #   triton:
+    #     condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  app-network:
+    driver: bridge

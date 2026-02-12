@@ -1,0 +1,61 @@
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+triton_logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model files (too large for git)
+model/*.safetensors
+model/*.bin
+triton_models/*/1/*.onnx
+triton_models/*/1/*.pt
+triton_models/*/1/*.plan
+triton_models/llm/1/*
+
+# Docker volumes
+postgres_data/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Performance evaluation results
+performance_evaluation/results/*.json
+performance_evaluation/reports/*.html
+performance_evaluation/reports/*.pdf
+performance_evaluation/charts/*.png
+
+# Jupyter
+.ipynb_checkpoints/
