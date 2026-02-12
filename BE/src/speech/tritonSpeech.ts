@@ -38,7 +38,7 @@ interface CreateSessionOptions {
 export const createTritonSession = (options: CreateSessionOptions): SttSession => {
   const modelName = STT_MODEL();
   const sampleRate = 16000;
-  const chunkSeconds = 3.0; // Process every 3 seconds
+  const chunkSeconds = 3; // Process every 3 seconds
   const overlapPercent = 0.2; // 20% overlap
   
   const buffer = new StreamingAudioBuffer(chunkSeconds, overlapPercent, sampleRate);
@@ -55,10 +55,12 @@ export const createTritonSession = (options: CreateSessionOptions): SttSession =
    */
   const processChunk = async (audioChunk: Float32Array, isFinal: boolean = false) => {
     if (isProcessing) {
+      logger.warn(`[Triton STT] Skipping chunk - already processing`);
       return; // Skip if already processing
     }
 
     isProcessing = true;
+    logger.info(`[Triton STT] Starting inference for ${audioChunk.length} samples (${isFinal ? 'FINAL' : 'partial'})`);
 
     try {
       // Pad to 30 seconds (Whisper requirement)
@@ -91,11 +93,14 @@ export const createTritonSession = (options: CreateSessionOptions): SttSession =
       text = text.trim();
 
       if (text) {
+        logger.info(`[Triton STT] Got transcription: "${text}" (${isFinal ? 'FINAL' : 'partial'})`);
         if (isFinal) {
-          options.onFinal({ text });
+          options.onFinal({ text, offset: 0, duration: 0 });
         } else {
-          options.onPartial({ text });
+          options.onPartial({ text, offset: 0, duration: 0 });
         }
+      } else {
+        logger.info(`[Triton STT] Empty transcription result`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -124,6 +129,7 @@ export const createTritonSession = (options: CreateSessionOptions): SttSession =
       // Process complete chunks
       while (buffer.hasCompleteChunk()) {
         const chunk = buffer.getNextChunk();
+        logger.info(`[Triton STT] Processing chunk: ${chunk.length} samples`);
         // Process asynchronously without awaiting
         processChunk(chunk, false).catch(err => {
           logger.error(`Chunk processing failed: ${err.message}`);
@@ -136,6 +142,17 @@ export const createTritonSession = (options: CreateSessionOptions): SttSession =
 
       isStarted = false;
       logger.info('Triton STT session stopping...');
+
+      // Wait for any in-flight processing to complete
+      let waitCount = 0;
+      while (isProcessing && waitCount < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        waitCount++;
+      }
+
+      if (waitCount >= 50) {
+        logger.warn('[Triton STT] Timeout waiting for processing to complete');
+      }
 
       // Process remaining audio as final
       const remaining = buffer.getRemainingAudio();

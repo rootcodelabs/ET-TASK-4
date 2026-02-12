@@ -1,9 +1,5 @@
 /**
  * Triton Inference Server gRPC Client
- * 
- * Note: This requires Triton protobuf files. Download from:
- * https://github.com/triton-inference-server/common/tree/main/protobuf
- * Place grpc_service.proto and model_config.proto in src/speech/proto/
  */
 
 import * as grpc from '@grpc/grpc-js';
@@ -52,22 +48,14 @@ const getTritonDatatype = (data: any): string => {
 };
 
 /**
- * Connect to Triton Inference Server
+ * Connect to Triton Inference Server via gRPC
  */
 export const connectTriton = async (): Promise<void> => {
-  if (isConnected && grpcClient) {
-    return;
-  }
-
   const tritonUrl = getTritonUrl();
-  logger.info(`Connecting to Triton at ${tritonUrl}...`);
+  logger.info(`Connecting to Triton gRPC at ${tritonUrl}...`);
 
   try {
-    // Load proto file
     const PROTO_PATH = path.join(__dirname, 'proto', 'grpc_service.proto');
-    
-    // For now, we'll create a simple HTTP-based client as fallback
-    // TODO: Implement full gRPC client with proto files
     
     const packageDefinition = protoLoader.loadSync(
       PROTO_PATH,
@@ -83,31 +71,61 @@ export const connectTriton = async (): Promise<void> => {
     const protoDescriptor = grpc.loadPackageDefinition(packageDefinition);
     const inference = (protoDescriptor.inference as any);
 
+    if (!inference || !inference.GRPCInferenceService) {
+      throw new Error('Failed to load GRPCInferenceService from proto file');
+    }
+
     grpcClient = new inference.GRPCInferenceService(
       tritonUrl,
       grpc.credentials.createInsecure()
     );
 
+    // Test connection with ServerLive call
+    await new Promise<void>((resolve, reject) => {
+      grpcClient.ServerLive({}, (error: any, response: any) => {
+        if (error) {
+          reject(new Error(`gRPC ServerLive failed: ${error.message}`));
+        } else if (response && response.live) {
+          resolve();
+        } else {
+          reject(new Error('Triton server is not live'));
+        }
+      });
+    });
+
     isConnected = true;
-    logger.info('✓ Connected to Triton Inference Server');
+    logger.info('Connected to Triton Inference Server via gRPC');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.error(`Failed to connect to Triton: ${message}`);
-    // Fallback to HTTP REST API
-    logger.warn('Will use HTTP REST API as fallback');
+    logger.error(`gRPC connection failed: ${message}`);
+    logger.info('Falling back to HTTP REST API');
     isConnected = false;
-    throw error;
+    grpcClient = null;
   }
 };
 
 /**
- * Check if Triton server is alive
+ * Check if Triton server is alive (via gRPC or HTTP)
  */
 export const isTritonAlive = async (): Promise<boolean> => {
-  if (!isConnected) return false;
+  // Try gRPC first if connected
+  if (isConnected && grpcClient) {
+    try {
+      const response = await new Promise<any>((resolve, reject) => {
+        grpcClient.ServerLive({}, (error: any, response: any) => {
+          if (error) reject(error);
+          else resolve(response);
+        });
+      });
+      return response && response.live;
+    } catch (error) {
+      logger.warn('gRPC ServerLive failed, falling back to HTTP');
+      isConnected = false;
+    }
+  }
 
+  // Fallback to HTTP
   try {
-    // Simple health check using HTTP
     const tritonUrl = getTritonUrl().replace(':8001', ':8000');
     const response = await fetch(`http://${tritonUrl}/v2/health/live`);
     return response.ok;
@@ -120,6 +138,22 @@ export const isTritonAlive = async (): Promise<boolean> => {
  * Check if a specific model is ready
  */
 export const isTritonModelReady = async (modelName: string): Promise<boolean> => {
+  // Try gRPC first if connected
+  if (isConnected && grpcClient) {
+    try {
+      const response = await new Promise<any>((resolve, reject) => {
+        grpcClient.ModelReady({ name: modelName }, (error: any, response: any) => {
+          if (error) reject(error);
+          else resolve(response);
+        });
+      });
+      return response && response.ready;
+    } catch (error) {
+      logger.warn(`gRPC ModelReady failed for ${modelName}, falling back to HTTP`);
+    }
+  }
+
+  // Fallback to HTTP
   try {
     const tritonUrl = getTritonUrl().replace(':8001', ':8000');
     const response = await fetch(`http://${tritonUrl}/v2/models/${modelName}/ready`);
@@ -129,6 +163,97 @@ export const isTritonModelReady = async (modelName: string): Promise<boolean> =>
     logger.error(`Error checking model ${modelName}: ${message}`);
     return false;
   }
+};
+
+/**
+ * Perform inference using gRPC
+ */
+const inferGrpc = async (
+  modelName: string,
+  inputs: Record<string, any>,
+  outputs: string[]
+): Promise<Record<string, any>> => {
+  if (!grpcClient) {
+    throw new Error('gRPC client not connected');
+  }
+
+  // Prepare inputs
+  const inputTensors = Object.entries(inputs).map(([name, data]) => {
+    let shape: number[];
+    let contents: any = {};
+    const datatype = getTritonDatatype(data);
+
+    if (data instanceof Float32Array) {
+      shape = [data.length];
+      contents.fp32_contents = Array.from(data);
+    } else if (data instanceof Float64Array) {
+      shape = [data.length];
+      contents.fp64_contents = Array.from(data);
+    } else if (data instanceof Int16Array || data instanceof Int32Array) {
+      shape = [data.length];
+      contents.int_contents = Array.from(data);
+    } else if (Array.isArray(data) && typeof data[0] === 'string') {
+      shape = [data.length];
+      contents.bytes_contents = data.map((s: string) => Buffer.from(s, 'utf-8'));
+    } else {
+      shape = [1];
+      contents.fp32_contents = [data];
+    }
+
+    return {
+      name,
+      datatype,
+      shape,
+      contents,
+    };
+  });
+
+  // Prepare outputs
+  const outputTensors = outputs.map(name => ({ name }));
+
+  const request = {
+    model_name: modelName,
+    inputs: inputTensors,
+    outputs: outputTensors,
+  };
+
+  // Call ModelInfer
+  const response = await new Promise<any>((resolve, reject) => {
+    grpcClient.ModelInfer(request, (error: any, response: any) => {
+      if (error) {
+        reject(new Error(`gRPC ModelInfer failed: ${error.message}`));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+
+  // Parse outputs
+  const outputData: Record<string, any> = {};
+  for (const output of response.outputs) {
+    const name = output.name;
+    const datatype = output.datatype;
+    const contents = output.contents;
+
+    // Extract data based on type
+    if (datatype === TRITON_DATATYPE.FP32 && contents.fp32_contents) {
+      outputData[name] = new Float32Array(contents.fp32_contents);
+    } else if (datatype === TRITON_DATATYPE.FP64 && contents.fp64_contents) {
+      outputData[name] = new Float64Array(contents.fp64_contents);
+    } else if ((datatype === TRITON_DATATYPE.INT16 || datatype === TRITON_DATATYPE.INT32) && contents.int_contents) {
+      outputData[name] = new Int32Array(contents.int_contents);
+    } else if (datatype === TRITON_DATATYPE.BYTES && contents.bytes_contents) {
+      // Convert bytes to string
+      outputData[name] = Buffer.from(contents.bytes_contents[0]).toString('utf-8');
+    } else if (contents.bytes_contents && contents.bytes_contents.length > 0) {
+      // Fallback for BYTES type
+      outputData[name] = Buffer.from(contents.bytes_contents[0]).toString('utf-8');
+    } else {
+      outputData[name] = contents;
+    }
+  }
+
+  return outputData;
 };
 
 /**
@@ -209,15 +334,28 @@ const inferHttp = async (
 };
 
 /**
- * Perform inference on Triton model
+ * Perform inference on Triton model (tries gRPC first, falls back to HTTP)
  */
 export const inferTriton = async (
   modelName: string,
   inputs: Record<string, Float32Array | Int16Array | string[]>,
   outputs: string[]
 ): Promise<Record<string, any>> => {
+  // Try gRPC first if connected
+  if (isConnected && grpcClient) {
+    try {
+      logger.debug(`Using gRPC for ${modelName} inference`);
+      return await inferGrpc(modelName, inputs, outputs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`gRPC inference failed: ${message}, falling back to HTTP`);
+      isConnected = false;
+    }
+  }
+
+  // Fallback to HTTP
   try {
-    // Use HTTP REST API (more compatible)
+    logger.debug(`Using HTTP for ${modelName} inference`);
     return await inferHttp(modelName, inputs, outputs);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

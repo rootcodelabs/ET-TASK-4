@@ -2,6 +2,7 @@ export interface StartMessage {
   type: "start";
   language?: string;
   clientId?: string;
+  provider?: "cloud" | "onprem";
 }
 
 export interface StopMessage {
@@ -60,6 +61,9 @@ export const parseClientMessage = (raw: string): ClientMessage | null => {
         type: "start",
         language: typeof data.language === "string" ? data.language : undefined,
         clientId: typeof data.clientId === "string" ? data.clientId : undefined,
+        provider: data.provider === "onprem" || data.provider === "cloud" 
+        ? data.provider 
+        : undefined,
       };
     }
 

@@ -5,6 +5,9 @@ import cors from "cors";
 import http from "http";
 import { createAzureSession, SttSession } from "./speech/azureSpeech";
 import { transcribeBatch } from "./speech/azureBatch";
+import { createTritonSession } from "./speech/tritonSpeech";
+import { transcribeBatch as tritonTranscribeBatch } from "./speech/tritonBatch";
+import { connectTriton, isTritonAlive, isTritonModelReady } from "./speech/tritonClient";
 import multer from "multer";
 import crypto from "crypto";
 import * as speechsdk from "microsoft-cognitiveservices-speech-sdk";
@@ -16,6 +19,17 @@ import {
 import { logger } from "./utils/logger";
 
 dotenv.config();
+
+// Initialize Triton if configured
+if (process.env.TRITON_GRPC_URL) {
+  connectTriton()
+    .then(async () => {
+      logger.info("Triton connected");
+      const sttReady = await isTritonModelReady(process.env.TRITON_STT_MODEL || 'whisper');
+      logger.info(`Triton STT model ready: ${sttReady}`);
+    })
+    .catch(err => logger.warn(`Triton not available: ${err.message}`));
+}
 
 const PORT = Number(process.env.PORT || 8080);
 const PATH = "/ws/stt";
@@ -126,19 +140,34 @@ app.post(
     const language = normalizeLanguage(
       typeof req.body?.language === "string" ? req.body.language : "et-EE"
     );
+    
+    const provider = (req.query.provider as string) || req.body?.provider || "cloud";
 
     try {
       if (!file.mimetype.includes("wav")) {
         return res.status(400).json({ error: "Only WAV PCM 16kHz mono is supported" });
       }
 
-      const key = getEnv("AZURE_SPEECH_KEY");
-      const region = getEnv("AZURE_SPEECH_REGION");
-      if (!key || !region) {
-        return res.status(500).json({ error: "Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION" });
+      let result;
+      
+      if (provider === "onprem") {
+        const tritonReady = await isTritonAlive();
+        if (!tritonReady) {
+          return res.status(503).json({ error: "Triton server is not available" });
+        }
+        
+        logger.info(`Batch transcription using Triton (on-prem), language=${language}`);
+        result = await tritonTranscribeBatch(file.buffer, language);
+      } else {
+        const key = getEnv("AZURE_SPEECH_KEY");
+        const region = getEnv("AZURE_SPEECH_REGION");
+        if (!key || !region) {
+          return res.status(500).json({ error: "Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION" });
+        }
+        
+        logger.info(`Batch transcription using Azure (cloud), language=${language}`);
+        result = await transcribeBatch(key, region, file.buffer, language);
       }
-
-      const result = await transcribeBatch(key, region, file.buffer, language);
 
       return res.json({ text: result.text || "", duration_ms: result.durationMs });
     } catch (err) {
@@ -206,11 +235,17 @@ app.post("/api/tts", async (req, res) => {
   const language = normalizeLanguage(
     typeof req.body?.language === "string" ? req.body.language : "et-EE"
   );
+  const provider = req.body?.provider || "cloud";
+  
   if (!text.trim()) {
     return res.status(400).json({ error: "Text is required" });
   }
 
   try {
+    if (provider === "onprem") {
+      return res.status(501).json({ error: "On-prem TTS not yet implemented" });
+    }
+    
     const audioBuffer = await synthesizeSpeech(text, language);
     res.setHeader("Content-Type", "audio/wav");
     res.send(audioBuffer);
@@ -341,61 +376,114 @@ wss.on("connection", (ws) => {
         return;
       }
 
-      const key = process.env.AZURE_SPEECH_KEY;
-      const region = process.env.AZURE_SPEECH_REGION;
-      if (!key || !region) {
-        safeSend(ws, {
-          type: "error",
-          reason: "config",
-          details: "Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION",
-        });
-        return;
-      }
-
       const language = normalizeLanguage(msg.language);
+      const provider = msg.provider || "cloud";
       state.clientId = msg.clientId || null;
+      
       if (state.clientId) {
         logger.info(`Client id: ${state.clientId}`);
       }
-      logger.info(`Start requested. language=${language}`);
+      logger.info(`Start requested. language=${language}, provider=${provider}`);
 
       state.stoppedSent = false;
 
       try {
-        const session = createAzureSession({
-          key,
-          region,
-          language,
-          onPartial: (event) => {
-            safeSend(ws, {
-              type: "partial",
-              text: event.text,
-              offset: event.offset,
-              duration: event.duration,
-              clientId: state.clientId || undefined,
-            });
-          },
-          onFinal: (event) => {
-            safeSend(ws, {
-              type: "final",
-              text: event.text,
-              offset: event.offset,
-              duration: event.duration,
-              clientId: state.clientId || undefined,
-            });
-          },
-          onError: (event) => {
+        let session: SttSession;
+        
+        if (provider === "onprem") {
+          const tritonReady = await isTritonAlive();
+          if (!tritonReady) {
             safeSend(ws, {
               type: "error",
-              reason: event.reason,
-              details: event.details,
+              reason: "triton_unavailable",
+              details: "Triton server is not available. Please use cloud provider.",
               clientId: state.clientId || undefined,
             });
-          },
-          onStopped: () => {
-            sendStoppedOnce(ws, state);
-          },
-        });
+            return;
+          }
+
+          logger.info("Using Triton (on-prem) for STT");
+          session = createTritonSession({
+            language,
+            onPartial: (event) => {
+              safeSend(ws, {
+                type: "partial",
+                text: event.text,
+                offset: event.offset,
+                duration: event.duration,
+                clientId: state.clientId || undefined,
+              });
+            },
+            onFinal: (event) => {
+              safeSend(ws, {
+                type: "final",
+                text: event.text,
+                offset: event.offset,
+                duration: event.duration,
+                clientId: state.clientId || undefined,
+              });
+            },
+            onError: (event) => {
+              safeSend(ws, {
+                type: "error",
+                reason: event.reason,
+                details: event.details,
+                clientId: state.clientId || undefined,
+              });
+            },
+            onStopped: () => {
+              sendStoppedOnce(ws, state);
+            },
+          });
+        } else {
+          const key = process.env.AZURE_SPEECH_KEY;
+          const region = process.env.AZURE_SPEECH_REGION;
+          if (!key || !region) {
+            safeSend(ws, {
+              type: "error",
+              reason: "config",
+              details: "Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION",
+              clientId: state.clientId || undefined,
+            });
+            return;
+          }
+
+          logger.info("Azure Speech configured. language=" + language);
+          session = createAzureSession({
+            key,
+            region,
+            language,
+            onPartial: (event) => {
+              safeSend(ws, {
+                type: "partial",
+                text: event.text,
+                offset: event.offset,
+                duration: event.duration,
+                clientId: state.clientId || undefined,
+              });
+            },
+            onFinal: (event) => {
+              safeSend(ws, {
+                type: "final",
+                text: event.text,
+                offset: event.offset,
+                duration: event.duration,
+                clientId: state.clientId || undefined,
+              });
+            },
+            onError: (event) => {
+              safeSend(ws, {
+                type: "error",
+                reason: event.reason,
+                details: event.details,
+                clientId: state.clientId || undefined,
+              });
+            },
+            onStopped: () => {
+              sendStoppedOnce(ws, state);
+            },
+          });
+        }
 
         state.session = session;
         state.isStarted = true;

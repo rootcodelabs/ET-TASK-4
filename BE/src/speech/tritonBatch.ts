@@ -1,5 +1,5 @@
 /**
- * Triton Batch Transcription (equivalent to azureBatch.ts)
+ * Triton Batch Transcription
  */
 
 import { logger } from "../utils/logger";
@@ -7,13 +7,14 @@ import { inferTriton, STT_MODEL } from "./tritonClient";
 import { parseWavPcm, pcmToFloat32, padOrTrimAudio } from "../utils/audioUtils";
 
 /**
- * Transcribe audio file using Triton (matches azureBatch interface)
+ * Transcribe audio file using Triton Inference Server
  */
 export const transcribeBatch = async (
   audioBuffer: Buffer,
   language: string = "et-EE"
-): Promise<string> => {
+): Promise<{ text: string; durationMs: number }> => {
   const modelName = STT_MODEL();
+  const startTime = Date.now();
   
   try {
     logger.info(`Triton batch transcription started. model=${modelName}, language=${language}`);
@@ -35,14 +36,14 @@ export const transcribeBatch = async (
     // Convert PCM to Float32Array
     let audioFloat32 = pcmToFloat32(wav.data);
 
-    // Resample if needed (simple approach - for production use proper resampling)
+    // Resample
     if (wav.sampleRate !== 16000) {
-      logger.warn(`Audio sample rate is ${wav.sampleRate}Hz, expected 16000Hz. Resampling not implemented - results may be poor.`);
+      logger.warn(`Audio sample rate is ${wav.sampleRate}Hz, expected 16000Hz`);
       // TODO: Implement proper resampling using a library
       // For now, we'll just pad/trim
     }
 
-    // Pad to 30 seconds (Whisper requirement)
+    // Pad to 30 seconds
     const targetSamples = 30 * 16000; // 480,000 samples at 16kHz
     audioFloat32 = padOrTrimAudio(audioFloat32, targetSamples);
 
@@ -74,8 +75,13 @@ export const transcribeBatch = async (
 
     text = text.trim();
     
-    logger.info(`Triton batch transcription completed. Length: ${text.length} chars`);
-    return text;
+    const durationMs = Date.now() - startTime;
+    logger.info(`Triton batch transcription completed. Length: ${text.length} chars, duration: ${durationMs}ms`);
+    
+    return {
+      text,
+      durationMs,
+    };
 
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
